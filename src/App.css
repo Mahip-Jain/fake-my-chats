@@ -40,3 +40,35 @@
 .read-the-docs {
   color: #888;
 }
+
+.incoming_msg {
+  background-color: #dcd7d7;
+  padding: 10px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.outgoing_msg {
+  background-color: #00a0fc;
+  padding: 10px;
+  border-radius: 10px;
+  margin-bottom: 10px;
+}
+
+.message_container {
+  display: inline-block;
+  max-width: 65%;
+  padding: 10px;
+}
+.message_container p {
+  white-space: pre-wrap;
+  text-align: left ;
+}
+.output {
+  display: flex;
+  flex-direction: column;
+}
+
+.input {
+  text-align: left;
+}
