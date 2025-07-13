@@ -59,6 +59,55 @@ const Leaf = ({ attributes, children, leaf }) => {
 	return <span {...attributes}>{children}</span>;
 };
 
+function parseTagsAndCleanChildren(children) {
+	// Flatten all text
+	let offsets = [];
+	let fullText = "";
+	children.forEach((child) => {
+		offsets.push(fullText.length);
+		fullText += child.text || "";
+	});
+
+	// Parse all tags from the full text
+	const tagRegex = /\[(\w+):([^\]]+)\]/g;
+	const tags = {};
+	let match;
+	let indicesToRemove = [];
+	while ((match = tagRegex.exec(fullText)) !== null) {
+		tags[match[1]] = match[2];
+		indicesToRemove.push([match.index, match.index + match[0].length]);
+	}
+
+	// Build clean text, skipping tag ranges
+	let cleanText = "";
+	let lastIndex = 0;
+	for (const [start, end] of indicesToRemove) {
+		cleanText += fullText.slice(lastIndex, start);
+		lastIndex = end;
+	}
+	cleanText += fullText.slice(lastIndex);
+
+	// If you want to preserve formatting, this gets tricky.
+	// But for WhatsApp-style chats, most messages don't have tags in the middle of formatting.
+	// So you can just replace the children with a single child with the clean text:
+	return {
+		tags,
+		cleanChildren: [{ text: cleanText.trim() }],
+	};
+}
+
+function getValidTimeOrNow(timeString) {
+	const hhmmRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+	if (hhmmRegex.test(timeString)) {
+		return timeString;
+	}
+	// Return current time as HH:MM
+	const now = new Date();
+	const hh = String(now.getHours()).padStart(2, "0");
+	const mm = String(now.getMinutes()).padStart(2, "0");
+	return `${hh}:${mm}`;
+}
+
 function App() {
 	const [editor] = useState(() => withReact(createEditor()));
 	const [output, setOutput] = useState("A line of text in a paragraph.");
@@ -73,19 +122,24 @@ function App() {
 
 	const parseSlateValue = (value) => {
 		let clone = JSON.parse(JSON.stringify(value));
-		console.log(clone);
-		// check if first node is a paragraph
+
+		// First pass: assign sender, id, tags, clean children
 		for (let i = 0; i < clone.length; i++) {
 			let node = clone[i];
-			// check if node starts with >
-			if (node.children[0].text.startsWith(">")) {
-				// remove > from the start
-				node.children[0].text = node.children[0].text.replace(">", "").trim();
-				node.sender = 0; // 0 for sender
-			} else if (node.children[0].text.startsWith("<")) {
-				// remove < from the start
-				node.children[0].text = node.children[0].text.replace("<", "").trim();
-				node.sender = 1; // 1 for receiver
+			if (
+				node.children[0].text.startsWith(">") ||
+				node.children[0].text.startsWith("<")
+			) {
+				node.sender = node.children[0].text.startsWith(">") ? 0 : 1;
+				node.children[0].text = node.children[0].text.replace(/^[><]/, "").trim();
+				const { tags, cleanChildren } = parseTagsAndCleanChildren(node.children);
+				node.tags = tags; // Keep tags for next pass
+				node.children = cleanChildren;
+				if (tags.id) node.id = tags.id;
+				node.time = getValidTimeOrNow(tags.time);
+			} else if (node.children[0].text.startsWith("::date")) {
+				node.children[0].text = node.children[0].text.replace("::date", "").trim();
+				node.type = "date-divider";
 			} else if (i == 0) {
 				clone.splice(0, 1);
 				i--;
@@ -98,9 +152,26 @@ function App() {
 				continue;
 			}
 		}
+
+		// Second pass: build id map for replies
+		const idMap = {};
+		for (const node of clone) {
+			if (node.id) idMap[node.id] = node;
+		}
+
+		// Third pass: resolve reply texts
+		for (const node of clone) {
+			const tags = node.tags || {};
+			if (tags.reply && idMap[tags.reply]) {
+				node.replyNode = idMap[tags.reply]; // Attach the node being replied to
+				node.type = "reply";
+			}
+			// Clean up temporary tag property
+			delete node.tags;
+		}
+
 		return clone;
 	};
-
 	const serialize = (node) => {
 		if (Text.isText(node)) {
 			let string = escapeHtml(node.text);
@@ -112,18 +183,35 @@ function App() {
 		}
 
 		const children = node.children.map((n) => serialize(n)).join("");
+		const timeHtml = node.time
+			? `<span class="msg-time">${escapeHtml(node.time)}</span>`
+			: "";
 
 		switch (node.type) {
 			case "quote":
 				return `<blockquote><p>${children}</p></blockquote>`;
+			case "reply":
+				let replyText = node.replyNode
+					? node.replyNode.children.map((n) => serialize(n)).join("")
+					: "";
+				return `<div style="align-self:${
+					node.sender == 0 ? "flex-end" : "flex-start"
+				}" class="message_container ${
+					node.sender == 0 ? "outgoing_msg" : "incoming_msg"
+				}">
+					<div class="reply-preview">${replyText}</div>
+					<p>${children} ${timeHtml}</p>
+				</div>`;
 			case "paragraph":
 				return `<div style="align-self:${
 					node.sender == 0 ? "flex-end" : "flex-start"
 				}" class="message_container ${
 					node.sender == 0 ? "outgoing_msg" : "incoming_msg"
-				}"><p>${children}</p></div>`;
+				}"><p>${children} ${timeHtml}</p></div>`;
 			case "link":
 				return `<a href="${escapeHtml(node.url)}">${children}</a>`;
+			case "date-divider":
+				return `<div class="date-divider"><p>${children}</p></div>`;
 			default:
 				return children;
 		}
@@ -157,9 +245,8 @@ function App() {
 							editor={editor}
 							initialValue={initialValue}
 							onChange={(value) => {
-								console.log(typeof value);
 								let x = parseSlateValue([...value]);
-								console.log(typeof x);
+								console.log(x);
 								setOutput(x.map((n) => serialize(n)).join(""));
 							}}
 						>
