@@ -165,23 +165,29 @@ function App() {
 
 		// Second pass: build id map for replies, but skip deleted messages
 		const idMap = {};
-		for (const node of clone) {
+		const idIndexMap = {};
+		clone.forEach((node, idx) => {
 			if (node.id && node.type !== "deleted") {
 				idMap[node.id] = node;
+				idIndexMap[node.id] = idx;
 			}
-		}
+		});
 
 		// Third pass: resolve reply texts
-		for (const node of clone) {
+		clone.forEach((node, idx) => {
 			const tags = node.tags || {};
-			// only non-deleted messages can become replies,
-			// and only if the target exists in idMap (i.e. isn’t deleted)
-			if (node.type !== "deleted" && tags.reply && idMap[tags.reply]) {
-				node.replyNode = idMap[tags.reply];
+			const replyId = tags.reply;
+			if (
+				node.type !== "deleted" && // deleted messages can’t reply
+				replyId && // has a reply tag
+				idMap[replyId] && // the target exists
+				idIndexMap[replyId] < idx // and it appears *before* this node
+			) {
+				node.replyNode = idMap[replyId];
 				node.type = "reply";
 			}
 			delete node.tags;
-		}
+		});
 
 		return clone;
 	};
