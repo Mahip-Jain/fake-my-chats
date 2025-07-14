@@ -132,11 +132,21 @@ function App() {
 			) {
 				node.sender = node.children[0].text.startsWith(">") ? 0 : 1;
 				node.children[0].text = node.children[0].text.replace(/^[><]/, "").trim();
+
 				const { tags, cleanChildren } = parseTagsAndCleanChildren(node.children);
 				node.tags = tags; // Keep tags for next pass
 				node.children = cleanChildren;
 				if (tags.id) node.id = tags.id;
+				if (tags.react) node.react = tags.react;
+				if (tags.tick) {
+					node.tick = tags.tick;
+				} else {
+					node.tick = "delivered";
+				}
 				node.time = getValidTimeOrNow(tags.time);
+				if (node.children[0].text.startsWith("::deleted")) {
+					node.type = "deleted";
+				}
 			} else if (node.children[0].text.startsWith("::date")) {
 				node.children[0].text = node.children[0].text.replace("::date", "").trim();
 				node.type = "date-divider";
@@ -153,20 +163,23 @@ function App() {
 			}
 		}
 
-		// Second pass: build id map for replies
+		// Second pass: build id map for replies, but skip deleted messages
 		const idMap = {};
 		for (const node of clone) {
-			if (node.id) idMap[node.id] = node;
+			if (node.id && node.type !== "deleted") {
+				idMap[node.id] = node;
+			}
 		}
 
 		// Third pass: resolve reply texts
 		for (const node of clone) {
 			const tags = node.tags || {};
-			if (tags.reply && idMap[tags.reply]) {
-				node.replyNode = idMap[tags.reply]; // Attach the node being replied to
+			// only non-deleted messages can become replies,
+			// and only if the target exists in idMap (i.e. isn’t deleted)
+			if (node.type !== "deleted" && tags.reply && idMap[tags.reply]) {
+				node.replyNode = idMap[tags.reply];
 				node.type = "reply";
 			}
-			// Clean up temporary tag property
 			delete node.tags;
 		}
 
@@ -186,10 +199,25 @@ function App() {
 		const timeHtml = node.time
 			? `<span class="msg-time">${escapeHtml(node.time)}</span>`
 			: "";
-
+		let react = node.react
+			? `<span class="msg-react">${escapeHtml(node.react)}</span>`
+			: "";
+		let tickHtml = "";
+		switch (node.tick) {
+			case "delivered":
+				tickHtml = `<span class="msg-tick delivered">✓✓</span>`;
+				break;
+			case "read":
+				tickHtml = `<span class="msg-tick read">✓✓</span>`;
+				break;
+			case "sent":
+				tickHtml = `<span class="msg-tick sent">✓</span>`;
+				break;
+			default:
+				tickHtml = `<span class="msg-tick"></span>`;
+				break;
+		}
 		switch (node.type) {
-			case "quote":
-				return `<blockquote><p>${children}</p></blockquote>`;
 			case "reply":
 				let replyText = node.replyNode
 					? node.replyNode.children.map((n) => serialize(n)).join("")
@@ -200,18 +228,28 @@ function App() {
 					node.sender == 0 ? "outgoing_msg" : "incoming_msg"
 				}">
 					<div class="reply-preview">${replyText}</div>
-					<p>${children} ${timeHtml}</p>
+					<p>${children} ${timeHtml} ${tickHtml}</p>
+					${react}
 				</div>`;
 			case "paragraph":
 				return `<div style="align-self:${
 					node.sender == 0 ? "flex-end" : "flex-start"
 				}" class="message_container ${
 					node.sender == 0 ? "outgoing_msg" : "incoming_msg"
-				}"><p>${children} ${timeHtml}</p></div>`;
+				}"><p>${children} ${timeHtml} ${tickHtml}</p>
+				${react}
+				</div>`;
 			case "link":
 				return `<a href="${escapeHtml(node.url)}">${children}</a>`;
 			case "date-divider":
 				return `<div class="date-divider"><p>${children}</p></div>`;
+			case "deleted":
+				return `<div style="align-self:${
+					node.sender == 0 ? "flex-end" : "flex-start"
+				}" class="message_container ${
+					node.sender == 0 ? "outgoing_msg" : "incoming_msg"
+				}"><p class="deleted-msg">This message was deleted ${timeHtml} ${tickHtml}</p>
+				</div>`;
 			default:
 				return children;
 		}
